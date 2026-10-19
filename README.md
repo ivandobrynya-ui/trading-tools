@@ -33,11 +33,6 @@ A tool that compiles and a tester that shows a profit prove nothing about the co
 - **No lookahead.** Signals on closed bars, higher timeframe data with `[1]` and `lookahead_on`, commission and slippage in every strategy test.
 - **Honest numbers.** The ORB EA ends with PF 0.84 to 1.10 depending on the session, the Multi-Asset EA with PF 0.87. I keep those numbers. These tools execute rules; they do not promise profit.
 
-## Not verified yet
-- Live restart tests on a demo account for the ORB and Multi-Asset EAs (need a weekday with an open market).
-- The live chain TradingView, webhook, receiver, MT5 (needs a paid TradingView plan for webhooks).
-- Live orders on Bybit testnet (need testnet API keys).
-
 ## Layout
 ```
 tradingview/<tool>/    Pine Script v6 indicators and strategies
