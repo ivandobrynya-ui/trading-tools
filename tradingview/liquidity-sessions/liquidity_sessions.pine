@@ -1,0 +1,274 @@
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ivan Semernya — Liquidity & Sessions (session ranges, PDH/PDL, PWH/PWL, liquidity sweeps, dashboard, alerts)
+
+//@version=6
+indicator("Liquidity & Sessions", "Liquidity & Sessions", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
+
+// ───────────────────────────── Inputs
+grpS = "Sessions (kill zones)"
+tz         = input.string("America/New_York", "Timezone", group = grpS, tooltip = "Session times below are read in this timezone. New York time follows US daylight saving automatically.")
+showAsia   = input.bool(true, "", inline = "as", group = grpS)
+asiaSess   = input.session("2000-0000", "Asia", inline = "as", group = grpS)
+asiaCol    = input.color(color.new(#7E57C2, 85), "", inline = "as", group = grpS)
+showLdn    = input.bool(true, "", inline = "ld", group = grpS)
+ldnSess    = input.session("0200-0500", "London", inline = "ld", group = grpS)
+ldnCol     = input.color(color.new(#2962FF, 85), "", inline = "ld", group = grpS)
+showNy     = input.bool(true, "", inline = "ny", group = grpS)
+nySess     = input.session("0700-1000", "New York", inline = "ny", group = grpS)
+nyCol      = input.color(color.new(#FF9800, 85), "", inline = "ny", group = grpS)
+showBoxes  = input.bool(true, "Session range boxes", group = grpS)
+boxDays    = input.int(10, "Keep boxes for last N days", minval = 1, maxval = 60, group = grpS)
+
+grpL = "Liquidity levels"
+showSessLv = input.bool(true, "Session highs/lows (extend until swept)", group = grpL)
+lvlDays    = input.int(3, "Drop untouched session levels after (days)", minval = 1, maxval = 20, group = grpL)
+showPD     = input.bool(true, "Previous day high/low (PDH/PDL)", inline = "pd", group = grpL)
+pdCol      = input.color(#E91E63, "", inline = "pd", group = grpL)
+showPW     = input.bool(true, "Previous week high/low (PWH/PWL)", inline = "pw", group = grpL)
+pwCol      = input.color(#00897B, "", inline = "pw", group = grpL)
+
+grpX = "Sweeps & display"
+onBarClose = input.bool(true, "Confirm sweeps on bar close", group = grpX, tooltip = "A sweep is a wick beyond a level with a close back inside. A close beyond the level counts as a break, not a sweep.")
+showSweeps = input.bool(true, "Label sweeps", group = grpX)
+showBreaks = input.bool(false, "Label breaks", group = grpX)
+showTable  = input.bool(true, "Dashboard", group = grpX)
+
+// ───────────────────────────── Types & storage
+type Level
+    line   ln
+    label  tag
+    float  price
+    bool   isHigh
+    string name
+    string kind
+    color  col
+    int    born
+    string state = "open"
+
+type Sess
+    string name
+    color  col
+    bool   on
+    bool   inside = false
+    box    bx
+    float  hi
+    float  lo
+    int    hiBar
+    int    loBar
+
+type Hits
+    bool   bsl   = false
+    bool   ssl   = false
+    bool   pdh   = false
+    bool   pdl   = false
+    bool   pwh   = false
+    bool   pwl   = false
+    bool   asiaH = false
+    bool   asiaL = false
+    bool   ldnH  = false
+    bool   ldnL  = false
+    string msg   = ""
+
+var array<Level> active    = array.new<Level>()
+var array<line>  oldLines  = array.new<line>()
+var array<label> oldTags   = array.new<label>()
+var array<box>   sessBoxes = array.new<box>()
+var map<string, Level> lastLv = map.new<string, Level>()
+
+var Sess asia = Sess.new("Asia", asiaCol, showAsia)
+var Sess ldn  = Sess.new("London", ldnCol, showLdn)
+var Sess ny   = Sess.new("New York", nyCol, showNy)
+
+// ───────────────────────────── Helpers
+keepLine(line ln) =>
+    oldLines.push(ln)
+    if oldLines.size() > 100
+        line.delete(oldLines.shift())
+
+keepTag(label lb) =>
+    oldTags.push(lb)
+    if oldTags.size() > 100
+        label.delete(oldTags.shift())
+
+// New liquidity level: a line extended to the right and a name tag at the last bar.
+newLevel(float price, int x1, bool isHigh, string name, string kind, color c) =>
+    line  ln = line.new(x1, price, x1 + 1, price, color = c, width = kind == "S" ? 1 : 2,
+                        style = kind == "S" ? line.style_dashed : line.style_solid, extend = extend.right)
+    label tg = label.new(bar_index + 2, price, name, style = label.style_label_left, color = color(na), textcolor = c, size = size.small)
+    Level lv = Level.new(ln, tg, price, isHigh, name, kind, c, time)
+    active.push(lv)
+    lastLv.put(name, lv)
+    if active.size() > 60
+        Level old = active.shift()
+        line.delete(old.ln)
+        label.delete(old.tag)
+
+// Ends all active levels of one kind (used when a new day/week replaces PDH/PDL or PWH/PWL).
+retire(string kind) =>
+    if active.size() > 0
+        for i = active.size() - 1 to 0
+            Level lv = active.get(i)
+            if lv.kind == kind
+                line.set_extend(lv.ln, extend.none)
+                line.set_x2(lv.ln, bar_index - 1)
+                label.delete(lv.tag)
+                keepLine(lv.ln)
+                active.remove(i)
+
+markHit(Hits h, string name, bool isHigh) =>
+    if isHigh
+        h.bsl := true
+    else
+        h.ssl := true
+    h.msg := h.msg + (h.msg == "" ? "" : ", ") + name + " swept"
+    if name == "PDH"
+        h.pdh := true
+    else if name == "PDL"
+        h.pdl := true
+    else if name == "PWH"
+        h.pwh := true
+    else if name == "PWL"
+        h.pwl := true
+    else if name == "Asia H"
+        h.asiaH := true
+    else if name == "Asia L"
+        h.asiaL := true
+    else if name == "London H"
+        h.ldnH := true
+    else if name == "London L"
+        h.ldnL := true
+    true
+
+// Tracks the session range. Returns true on the first bar after the session ends.
+method update(Sess s, bool isIn) =>
+    bool ended = false
+    if s.on
+        if isIn and not s.inside
+            s.hi    := high
+            s.lo    := low
+            s.hiBar := bar_index
+            s.loBar := bar_index
+            if showBoxes
+                s.bx := box.new(bar_index, high, bar_index, low, border_color = color.new(s.col, 50), bgcolor = s.col,
+                                text = s.name, text_size = size.small, text_color = color.new(s.col, 20),
+                                text_halign = text.align_left, text_valign = text.align_top)
+                sessBoxes.push(s.bx)
+                if sessBoxes.size() > boxDays * 3
+                    box.delete(sessBoxes.shift())
+        else if isIn
+            if high > s.hi
+                s.hi    := high
+                s.hiBar := bar_index
+            if low < s.lo
+                s.lo    := low
+                s.loBar := bar_index
+            if not na(s.bx)
+                box.set_top(s.bx, s.hi)
+                box.set_bottom(s.bx, s.lo)
+                box.set_right(s.bx, bar_index)
+        else if s.inside
+            ended := true
+    s.inside := isIn
+    ended
+
+// ───────────────────────────── 1) Sessions (intraday charts up to 1h)
+bool ready  = not onBarClose or barstate.isconfirmed
+bool sessTF = timeframe.isintraday and timeframe.in_seconds() <= 3600
+bool inAsia = not na(time(timeframe.period, asiaSess, tz)) and sessTF
+bool inLdn  = not na(time(timeframe.period, ldnSess, tz)) and sessTF
+bool inNy   = not na(time(timeframe.period, nySess, tz)) and sessTF
+
+if asia.update(inAsia) and showSessLv
+    newLevel(asia.hi, asia.hiBar, true,  "Asia H", "S", color.new(asiaCol, 0))
+    newLevel(asia.lo, asia.loBar, false, "Asia L", "S", color.new(asiaCol, 0))
+if ldn.update(inLdn) and showSessLv
+    newLevel(ldn.hi, ldn.hiBar, true,  "London H", "S", color.new(ldnCol, 0))
+    newLevel(ldn.lo, ldn.loBar, false, "London L", "S", color.new(ldnCol, 0))
+if ny.update(inNy) and showSessLv
+    newLevel(ny.hi, ny.hiBar, true,  "NY H", "S", color.new(nyCol, 0))
+    newLevel(ny.lo, ny.loBar, false, "NY L", "S", color.new(nyCol, 0))
+
+// ───────────────────────────── 2) Previous day / week high and low (no repainting: [1] + lookahead_on)
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pwh, pwl] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+bool newDay  = timeframe.change("D")
+bool newWeek = timeframe.change("W")
+
+if showPD and timeframe.in_seconds() < 86400 and newDay and not na(pdh)
+    retire("D")
+    newLevel(pdh, bar_index, true,  "PDH", "D", pdCol)
+    newLevel(pdl, bar_index, false, "PDL", "D", pdCol)
+if showPW and timeframe.in_seconds() < 604800 and newWeek and not na(pwh)
+    retire("W")
+    newLevel(pwh, bar_index, true,  "PWH", "W", pwCol)
+    newLevel(pwl, bar_index, false, "PWL", "W", pwCol)
+
+// ───────────────────────────── 3) Sweeps: wick beyond the level and close back inside
+Hits h = Hits.new()
+if ready and active.size() > 0
+    for i = active.size() - 1 to 0
+        Level lv = active.get(i)
+        bool hit     = lv.isHigh ? high > lv.price : low < lv.price
+        bool expired = lv.kind == "S" and time - lv.born > lvlDays * 86400000
+        if hit
+            bool broke = lv.isHigh ? close > lv.price : close < lv.price
+            lv.state := broke ? "broken" : "swept"
+            line.set_extend(lv.ln, extend.none)
+            line.set_x2(lv.ln, bar_index)
+            label.delete(lv.tag)
+            keepLine(lv.ln)
+            if not broke
+                markHit(h, lv.name, lv.isHigh)
+            if (not broke and showSweeps) or (broke and showBreaks)
+                keepTag(label.new(bar_index, lv.isHigh ? high : low, lv.name + (broke ? " broken" : " sweep"),
+                                  style = lv.isHigh ? label.style_label_down : label.style_label_up,
+                                  color = color(na), textcolor = lv.col, size = size.tiny))
+            active.remove(i)
+        else if expired
+            lv.state := "expired"
+            line.delete(lv.ln)
+            label.delete(lv.tag)
+            active.remove(i)
+        else
+            label.set_x(lv.tag, bar_index + 2)
+
+// ───────────────────────────── Dashboard
+var table tbl = table.new(position.top_right, 3, 10, bgcolor = color.new(chart.bg_color, 10),
+                          frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0)
+if showTable and barstate.islast
+    color fg = chart.fg_color
+    string zone = inAsia ? "Asia" : inLdn ? "London" : inNy ? "New York" : "-"
+    table.cell(tbl, 0, 0, "Kill zone", text_color = color.new(fg, 40), text_size = size.small, text_halign = text.align_left)
+    table.cell(tbl, 1, 0, zone, text_color = fg, text_size = size.small)
+    table.cell(tbl, 2, 0, "", text_size = size.small)
+    array<string> names = array.from("PWH", "PDH", "London H", "Asia H", "Asia L", "London L", "PDL", "PWL")
+    for [i, nm] in names
+        Level lv = lastLv.get(nm)
+        string st    = "-"
+        string px    = "-"
+        color  nameC = color.new(fg, 60)
+        if not na(lv)
+            st    := lv.state
+            px    := str.tostring(lv.price, format.mintick)
+            nameC := lv.col
+        color stC = st == "swept" ? #FF9800 : st == "broken" ? #F23645 : st == "open" ? fg : color.new(fg, 60)
+        table.cell(tbl, 0, i + 1, nm, text_color = nameC, text_size = size.small, text_halign = text.align_left)
+        table.cell(tbl, 1, i + 1, px, text_color = fg, text_size = size.small, text_halign = text.align_right)
+        table.cell(tbl, 2, i + 1, st, text_color = stC, text_size = size.small)
+
+// ───────────────────────────── Alerts
+bool aBsl = h.bsl
+bool aSsl = h.ssl
+if h.msg != ""
+    alert(syminfo.ticker + " " + timeframe.period + ": " + h.msg + " at " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+alertcondition(aBsl,    "Buy-side liquidity sweep",  "{{ticker}} {{interval}}: buy-side liquidity swept (wick above a level, close back below)")
+alertcondition(aSsl,    "Sell-side liquidity sweep", "{{ticker}} {{interval}}: sell-side liquidity swept (wick below a level, close back above)")
+alertcondition(h.pdh,   "PDH sweep",                 "{{ticker}} {{interval}}: previous day high swept")
+alertcondition(h.pdl,   "PDL sweep",                 "{{ticker}} {{interval}}: previous day low swept")
+alertcondition(h.pwh,   "PWH sweep",                 "{{ticker}} {{interval}}: previous week high swept")
+alertcondition(h.pwl,   "PWL sweep",                 "{{ticker}} {{interval}}: previous week low swept")
+alertcondition(h.asiaH, "Asia high sweep",           "{{ticker}} {{interval}}: Asia session high swept")
+alertcondition(h.asiaL, "Asia low sweep",            "{{ticker}} {{interval}}: Asia session low swept")
+alertcondition(h.ldnH,  "London high sweep",         "{{ticker}} {{interval}}: London session high swept")
+alertcondition(h.ldnL,  "London low sweep",          "{{ticker}} {{interval}}: London session low swept")

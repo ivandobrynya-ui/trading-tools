@@ -1,0 +1,5 @@
+server_time,id,hash,symbol,action,status,ticket,lots,price,sl,tp,detail
+2026.09.14 00:00:00,live1,1CF52DBA,XAUUSD,buy,executed,2,0.20,4348.55000,4343.55000,0.00000,"risk 1.00%, spread 9, closed opposite 0"
+2026.09.14 00:00:00,live2,1BF52C27,XAUUSD,buy,rejected,0,0.00,0.00000,0.00000,0.00000,"stale: 789344000 s old"
+2026.09.14 00:00:00,live1,1CF52DBA,XAUUSD,buy,duplicate,0,0.00,0.00000,0.00000,0.00000,"id already processed by the EA"
+2026.09.14 00:00:00,live1,1CF52DBA,XAUUSD,buy,duplicate,0,0.00,0.00000,0.00000,0.00000,"id already processed by the EA"

@@ -1,0 +1,131 @@
+
+================ A_main {'risk': 0.5, 'daily': 3.0, 'max_total': 4, 'max_sym': 1, 'window_min': 15, 'be_trail': False, 'budget': True, 'magic': 261017}
+
+### A_main: tester summary
+trades 559, PF 0.87, net -19 575.72, max equity DD 37 769.65 (37.50%), win 174 (31.13%), history quality 100%
+| symbol | trades | win % | PF | net P/L |
+|---|---|---|---|---|
+| EURUSD | 137 | 25 | 0.63 | -14,831 |
+| GBPUSD | 104 | 24 | 0.61 | -12,081 |
+| USDJPY | 108 | 31 | 0.87 | -3,758 |
+| XAGUSD | 112 | 38 | 1.11 | 3,071 |
+| XAUUSD | 98 | 41 | 1.36 | 8,023 |
+by year: 2025: -28,062, 2026: 8,487
+
+[1] one entry per symbol per signal: 559 entries, max per (symbol, signal bar) = 1, max per (symbol, entry bar) = 1, entries without a signal tag = 0 -> OK
+    positions closed inside their entry bar: 43 (inside the entry window: 5); entries after which the position caps still allowed another entry on that symbol: 0. In these cases only the server deal history stood against a repeat entry.
+
+[2] lot per symbol: 559 entries. risk money = 0.5% of balance: OK (0 off); lots = floor(risk / loss per lot, volume step): OK (0 off); balance and volume match the tester report: OK (0 off)
+    | symbol | entries | stopped out | loss at SL / planned risk, median (min..max) | loss / (lots x loss per lot) | terminal calculator / tick value | loss at SL if lots came from tick value only |
+    |---|---|---|---|---|---|---|
+    | EURUSD | 137 | 102 | 0.998 (0.993..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | GBPUSD | 104 | 79 | 0.997 (0.989..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | USDJPY | 108 | 75 | 0.996 (0.973..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | XAGUSD | 112 | 70 | 0.976 (0.550..1.000) | 1.0000 | 10.00 | 9.98 x risk |
+    | XAUUSD | 98 | 58 | 0.973 (0.771..1.000) | 1.0000 | 10.00 | 9.98 x risk |
+    stops filled more than 2% beyond the planned risk (gaps): 0
+
+[3] caps: max open overall 4 (limit 4), max per symbol 1 (limit 1) -> OK; entries outside 08:00-20:00 Mon-Fri: 0; entries later than the entry window: 0 -> OK; slowest entry 880 s after the bar open
+
+[4] daily loss limit 3.0%: halts 0; per halt: P/L <= -limit, day start balance and closed P/L match the report, all open positions closed at the halt, no new entry that day -> OK (0 problems)
+    days that lost more than the limit without a halt: 0 []
+    worst day: 2025.11.25 -2.99%; days that closed beyond the limit: 0 of 284 (daily risk budget on)
+
+[6] signals (EMA 50/200 trend + RSI 14 pullback, recomputed in Python from exported bars): 1361 signals, 559 entries; entries on the right bar, side and signal tag: 559; wrong side or tag: 0; entries without a signal: 0 [] -> OK
+    ATR used by the EA = ATR here (within 1 tick): 559 of 559; SL distance = 1.5 ATR (within 2 ticks): 559 of 559
+    signals not traded: 802, by the EA's logged reason:
+       621  outside trading days or sessions
+        93  max positions for this symbol
+        84  spread
+         2  daily risk budget
+         2  max positions overall
+         0  no log line (EA saw no signal there) []
+    NICKEL: 0 entries; its signals were stopped by: {'outside trading days or sessions': 131, 'spread': 42}
+
+================ B_stateless {'risk': 0.5, 'daily': 3.0, 'max_total': 4, 'max_sym': 1, 'window_min': 15, 'be_trail': False, 'budget': True, 'magic': 261018}
+
+### B_stateless: tester summary
+trades 559, PF 0.87, net -19 575.72, max equity DD 37 769.65 (37.50%), win 174 (31.13%), history quality 100%
+| symbol | trades | win % | PF | net P/L |
+|---|---|---|---|---|
+| EURUSD | 137 | 25 | 0.63 | -14,831 |
+| GBPUSD | 104 | 24 | 0.61 | -12,081 |
+| USDJPY | 108 | 31 | 0.87 | -3,758 |
+| XAGUSD | 112 | 38 | 1.11 | 3,071 |
+| XAUUSD | 98 | 41 | 1.36 | 8,023 |
+by year: 2025: -28,062, 2026: 8,487
+
+[1] one entry per symbol per signal: 559 entries, max per (symbol, signal bar) = 1, max per (symbol, entry bar) = 1, entries without a signal tag = 0 -> OK
+    positions closed inside their entry bar: 43 (inside the entry window: 5); entries after which the position caps still allowed another entry on that symbol: 0. In these cases only the server deal history stood against a repeat entry.
+
+[2] lot per symbol: 559 entries. risk money = 0.5% of balance: OK (0 off); lots = floor(risk / loss per lot, volume step): OK (0 off); balance and volume match the tester report: OK (0 off)
+    | symbol | entries | stopped out | loss at SL / planned risk, median (min..max) | loss / (lots x loss per lot) | terminal calculator / tick value | loss at SL if lots came from tick value only |
+    |---|---|---|---|---|---|---|
+    | EURUSD | 137 | 102 | 0.998 (0.993..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | GBPUSD | 104 | 79 | 0.997 (0.989..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | USDJPY | 108 | 75 | 0.996 (0.973..1.000) | 1.0000 | 1.00 | 1.00 x risk |
+    | XAGUSD | 112 | 70 | 0.976 (0.550..1.000) | 1.0000 | 10.00 | 9.98 x risk |
+    | XAUUSD | 98 | 58 | 0.973 (0.771..1.000) | 1.0000 | 10.00 | 9.98 x risk |
+    stops filled more than 2% beyond the planned risk (gaps): 0
+
+[3] caps: max open overall 4 (limit 4), max per symbol 1 (limit 1) -> OK; entries outside 08:00-20:00 Mon-Fri: 0; entries later than the entry window: 0 -> OK; slowest entry 880 s after the bar open
+
+[4] daily loss limit 3.0%: halts 0; per halt: P/L <= -limit, day start balance and closed P/L match the report, all open positions closed at the halt, no new entry that day -> OK (0 problems)
+    days that lost more than the limit without a halt: 0 []
+    worst day: 2025.11.25 -2.99%; days that closed beyond the limit: 0 of 284 (daily risk budget on)
+
+================ C_stress {'risk': 1.0, 'daily': 1.5, 'max_total': 6, 'max_sym': 2, 'window_min': 0, 'be_trail': True, 'magic': 261019, 'budget': False}
+
+### C_stress: tester summary
+trades 553, PF 0.63, net -56 204.62, max equity DD 68 115.98 (68.01%), win 221 (39.96%), history quality 100%
+| symbol | trades | win % | PF | net P/L |
+|---|---|---|---|---|
+| EURUSD | 128 | 31 | 0.36 | -28,164 |
+| GBPUSD | 104 | 38 | 0.47 | -15,698 |
+| USDJPY | 109 | 43 | 0.80 | -5,444 |
+| XAGUSD | 115 | 43 | 0.72 | -8,420 |
+| XAUUSD | 97 | 45 | 1.07 | 1,522 |
+by year: 2025: -48,717, 2026: -7,487
+
+[1] one entry per symbol per signal: 553 entries, max per (symbol, signal bar) = 1, max per (symbol, entry bar) = 1, entries without a signal tag = 0 -> OK
+    positions closed inside their entry bar: 85 (inside the entry window: 85); entries after which the position caps still allowed another entry on that symbol: 506. In these cases only the server deal history stood against a repeat entry.
+
+[2] lot per symbol: 553 entries. risk money = 1.0% of balance: OK (0 off); lots = floor(risk / loss per lot, volume step): OK (0 off); balance and volume match the tester report: OK (0 off)
+
+[3] caps: max open overall 5 (limit 6), max per symbol 2 (limit 2) -> OK; entries outside 08:00-20:00 Mon-Fri: 0; entries later than the entry window: 0 -> OK; slowest entry 1260 s after the bar open
+
+[4] daily loss limit 1.5%: halts 94; per halt: P/L <= -limit, day start balance and closed P/L match the report, all open positions closed at the halt, no new entry that day -> OK (0 problems)
+    final loss on halt days, % of day start balance: median 1.57, max 2.77 (limit 1.5; checks run every tester tick, about 20 s)
+    days that lost more than the limit without a halt: 0 []
+    worst day: 2026.04.21 -2.77%; days that closed beyond the limit: 90 of 275 (daily risk budget off)
+
+[7] break-even moves 181, trailing moves 1566; stop-outs with a locked-in profit: 135
+
+================ D_budget {'risk': 1.0, 'daily': 1.5, 'max_total': 6, 'max_sym': 2, 'window_min': 0, 'be_trail': True, 'magic': 261020, 'budget': True}
+
+### D_budget: tester summary
+trades 335, PF 0.88, net -16 926.46, max equity DD 33 249.46 (32.61%), win 165 (49.25%), history quality 100%
+| symbol | trades | win % | PF | net P/L |
+|---|---|---|---|---|
+| EURUSD | 88 | 39 | 0.59 | -18,360 |
+| GBPUSD | 50 | 50 | 0.82 | -3,639 |
+| USDJPY | 75 | 49 | 0.89 | -3,413 |
+| XAGUSD | 63 | 59 | 1.34 | 7,324 |
+| XAUUSD | 59 | 54 | 1.05 | 1,162 |
+by year: 2025: -21,122, 2026: 4,195
+
+[1] one entry per symbol per signal: 335 entries, max per (symbol, signal bar) = 1, max per (symbol, entry bar) = 1, entries without a signal tag = 0 -> OK
+    positions closed inside their entry bar: 33 (inside the entry window: 33); entries after which the position caps still allowed another entry on that symbol: 328. In these cases only the server deal history stood against a repeat entry.
+
+[2] lot per symbol: 335 entries. risk money = 1.0% of balance: OK (0 off); lots = floor(risk / loss per lot, volume step): OK (0 off); balance and volume match the tester report: OK (0 off)
+
+[3] caps: max open overall 3 (limit 6), max per symbol 2 (limit 2) -> OK; entries outside 08:00-20:00 Mon-Fri: 0; entries later than the entry window: 0 -> OK; slowest entry 3225 s after the bar open
+
+[4] daily loss limit 1.5%: halts 3; per halt: P/L <= -limit, day start balance and closed P/L match the report, all open positions closed at the halt, no new entry that day -> OK (0 problems)
+    final loss on halt days, % of day start balance: median 1.53, max 1.58 (limit 1.5; checks run every tester tick, about 20 s)
+    days that lost more than the limit without a halt: 0 []
+    worst day: 2025.10.29 -1.58%; days that closed beyond the limit: 3 of 260 (daily risk budget on)
+
+[7] break-even moves 140, trailing moves 1298; stop-outs with a locked-in profit: 102
+
+[5] restart safety: B_stateless forgot all memory every cycle; deals 1118 vs 1118 in A_main, identical 1118 -> OK

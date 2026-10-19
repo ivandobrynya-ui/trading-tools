@@ -1,0 +1,207 @@
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ivan Semernya — Order Blocks & Fair Value Gaps (structure-based OBs, displacement FVGs, mitigation tracking, alerts)
+
+//@version=6
+indicator("Order Blocks & Fair Value Gaps", "OB & FVG", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_bars_back = 500)
+
+// ───────────────────────────── Inputs
+grpOB = "Order Blocks"
+showOB      = input.bool(true, "Show order blocks", group = grpOB)
+obLen       = input.int(10, "Structure pivot length", minval = 3, maxval = 50, group = grpOB, tooltip = "An order block is created when a candle closes beyond a pivot high/low of this length (break of structure). The OB is the extreme candle of the leg that led to the break.")
+obMax       = input.int(5, "Max active OBs per side", minval = 1, maxval = 20, group = grpOB)
+obMitSrc    = input.string("Close", "OB invalidated by", options = ["Close", "Wick"], group = grpOB)
+obUseBody   = input.bool(false, "Use candle body instead of full range", group = grpOB)
+obMaxAtr    = input.float(3.0, "Max OB height (x ATR)", minval = 0.5, maxval = 20.0, step = 0.5, group = grpOB, tooltip = "If the OB candle is taller than this, its body is used instead of the full range (removes giant zones from news spikes).")
+obReplace   = input.bool(true, "Replace overlapping older OBs", group = grpOB, tooltip = "When a new OB overlaps an active OB of the same direction, the older one is removed.")
+bullObCol   = input.color(color.new(#089981, 80), "Bullish OB", group = grpOB)
+bearObCol   = input.color(color.new(#F23645, 80), "Bearish OB", group = grpOB)
+
+grpF = "Fair Value Gaps"
+showFVG     = input.bool(true, "Show fair value gaps", group = grpF)
+fvgMinAtr   = input.float(0.25, "Min gap size (x ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = grpF, tooltip = "Filters out tiny gaps. 0 = show every gap.")
+fvgMax      = input.int(10, "Max active FVGs per side", minval = 1, maxval = 50, group = grpF)
+fvgMit      = input.string("Full fill (wick)", "FVG mitigated when", options = ["Full fill (wick)", "Close beyond", "50% touch (CE)"], group = grpF)
+showCE      = input.bool(true, "Show 50% line (consequent encroachment)", group = grpF)
+bullFvgCol  = input.color(color.new(#2962FF, 82), "Bullish FVG", group = grpF)
+bearFvgCol  = input.color(color.new(#FF9800, 82), "Bearish FVG", group = grpF)
+
+grpG = "General"
+onBarClose  = input.bool(true, "Detect only on confirmed (closed) bars", group = grpG, tooltip = "Prevents zones and alerts that appear and disappear on the live bar.")
+keepMit     = input.bool(false, "Keep mitigated zones on chart (greyed out)", group = grpG)
+showText    = input.bool(true, "Show zone labels", group = grpG)
+
+// ───────────────────────────── Types & storage
+type Zone
+    box   b
+    line  ce
+    float top
+    float bot
+    bool  touched = false
+
+var array<Zone> bullOBs  = array.new<Zone>()
+var array<Zone> bearOBs  = array.new<Zone>()
+var array<Zone> bullFVGs = array.new<Zone>()
+var array<Zone> bearFVGs = array.new<Zone>()
+
+bool ready = not onBarClose or barstate.isconfirmed
+
+// ───────────────────────────── Helpers
+newZone(array<Zone> arr, int left, float top, float bot, color fill, string txt, bool withCE, int maxN) =>
+    box bx = box.new(left, top, bar_index, bot, border_color = color.new(fill, 50), bgcolor = fill,
+                     extend = extend.right, text = showText ? txt : "", text_size = size.tiny,
+                     text_color = color.new(fill, 0), text_halign = text.align_right, text_valign = text.align_center)
+    float mid = (top + bot) / 2
+    line l = withCE ? line.new(left, mid, bar_index, mid, color = color.new(fill, 20), style = line.style_dotted, extend = extend.right) : na
+    arr.push(Zone.new(bx, l, top, bot))
+    if arr.size() > maxN
+        Zone old = arr.shift()
+        box.delete(old.b)
+        if not na(old.ce)
+            line.delete(old.ce)
+
+// Removes active zones that overlap the price range [bot, top].
+removeOverlaps(array<Zone> arr, float top, float bot) =>
+    int removed = 0
+    if arr.size() > 0
+        for i = arr.size() - 1 to 0
+            Zone z = arr.get(i)
+            if z.bot <= top and z.top >= bot
+                box.delete(z.b)
+                if not na(z.ce)
+                    line.delete(z.ce)
+                arr.remove(i)
+                removed += 1
+    removed
+
+// Updates active zones on this bar.
+// Returns [first touch of any zone, any zone mitigated]. Mitigated zones are removed (or greyed out).
+processZones(array<Zone> arr, bool isBull, string mode) =>
+    bool touchNow = false
+    bool mitNow   = false
+    if ready and arr.size() > 0
+        for i = arr.size() - 1 to 0
+            Zone z = arr.get(i)
+            float mid = (z.top + z.bot) / 2
+            bool mitigated = switch mode
+                "Close"            => isBull ? close < z.bot : close > z.top
+                "Wick"             => isBull ? low < z.bot   : high > z.top
+                "Full fill (wick)" => isBull ? low <= z.bot  : high >= z.top
+                "Close beyond"     => isBull ? close < z.bot : close > z.top
+                "50% touch (CE)"   => isBull ? low <= mid    : high >= mid
+                => false
+            if mitigated
+                mitNow := true
+                if keepMit
+                    box.set_extend(z.b, extend.none)
+                    box.set_right(z.b, bar_index)
+                    box.set_bgcolor(z.b, color.new(color.gray, 88))
+                    box.set_border_color(z.b, color.new(color.gray, 70))
+                    box.set_text_color(z.b, color.new(color.gray, 40))
+                    if not na(z.ce)
+                        line.set_extend(z.ce, extend.none)
+                        line.set_x2(z.ce, bar_index)
+                else
+                    box.delete(z.b)
+                    if not na(z.ce)
+                        line.delete(z.ce)
+                arr.remove(i)
+            else
+                box.set_right(z.b, bar_index)
+                if not z.touched and low <= z.top and high >= z.bot
+                    z.touched := true
+                    touchNow  := true
+    [touchNow, mitNow]
+
+// ───────────────────────────── 1) Update existing zones (before new zones are created on this bar)
+[bullObTouch,  bullObMit]  = processZones(bullOBs,  true,  obMitSrc)
+[bearObTouch,  bearObMit]  = processZones(bearOBs,  false, obMitSrc)
+[bullFvgTouch, bullFvgMit] = processZones(bullFVGs, true,  fvgMit)
+[bearFvgTouch, bearFvgMit] = processZones(bearFVGs, false, fvgMit)
+
+// ───────────────────────────── 2) Order blocks on break of structure
+var float phPrice   = na
+var int   phBar     = na
+var bool  phCrossed = true
+var float plPrice   = na
+var int   plBar     = na
+var bool  plCrossed = true
+
+float ph = ta.pivothigh(high, obLen, obLen)
+float pl = ta.pivotlow(low, obLen, obLen)
+if not na(ph)
+    phPrice   := ph
+    phBar     := bar_index - obLen
+    phCrossed := false
+if not na(pl)
+    plPrice   := pl
+    plBar     := bar_index - obLen
+    plCrossed := false
+
+float atr   = ta.atr(200)
+float obMaxH = obMaxAtr * nz(atr, high - low)
+bool newBullOB = false
+bool newBearOB = false
+
+// Bullish BOS: close above the last pivot high -> OB = candle with the lowest low between the pivot and the break
+if ready and not phCrossed and close > phPrice
+    phCrossed := true
+    int span = math.min(bar_index - phBar, 300)
+    float mn = na
+    int idx = na
+    for k = 1 to span
+        if na(mn) or low[k] < mn
+            mn  := low[k]
+            idx := k
+    if showOB and not na(idx)
+        bool  useBody = obUseBody or (high[idx] - low[idx]) > obMaxH
+        float t = useBody ? math.max(open[idx], close[idx]) : high[idx]
+        float b = useBody ? math.min(open[idx], close[idx]) : low[idx]
+        if obReplace
+            removeOverlaps(bullOBs, t, b)
+        newZone(bullOBs, bar_index - idx, t, b, bullObCol, "Bull OB", false, obMax)
+        newBullOB := true
+
+// Bearish BOS: close below the last pivot low -> OB = candle with the highest high between the pivot and the break
+if ready and not plCrossed and close < plPrice
+    plCrossed := true
+    int span = math.min(bar_index - plBar, 300)
+    float mx = na
+    int idx = na
+    for k = 1 to span
+        if na(mx) or high[k] > mx
+            mx  := high[k]
+            idx := k
+    if showOB and not na(idx)
+        bool  useBody = obUseBody or (high[idx] - low[idx]) > obMaxH
+        float t = useBody ? math.max(open[idx], close[idx]) : high[idx]
+        float b = useBody ? math.min(open[idx], close[idx]) : low[idx]
+        if obReplace
+            removeOverlaps(bearOBs, t, b)
+        newZone(bearOBs, bar_index - idx, t, b, bearObCol, "Bear OB", false, obMax)
+        newBearOB := true
+
+// ───────────────────────────── 3) Fair value gaps (3-candle imbalance, middle candle closes through the gap)
+float minGap = fvgMinAtr * nz(atr, 0)
+bool newBullFVG = false
+bool newBearFVG = false
+if ready and showFVG and bar_index > 2
+    if low > high[2] and close[1] > high[2] and (low - high[2]) >= minGap
+        newZone(bullFVGs, bar_index - 2, low, high[2], bullFvgCol, "FVG", showCE, fvgMax)
+        newBullFVG := true
+    if high < low[2] and close[1] < low[2] and (low[2] - high) >= minGap
+        newZone(bearFVGs, bar_index - 2, low[2], high, bearFvgCol, "FVG", showCE, fvgMax)
+        newBearFVG := true
+
+// ───────────────────────────── Alerts
+alertcondition(newBullOB,    "New bullish order block",       "{{ticker}} {{interval}}: new bullish order block")
+alertcondition(newBearOB,    "New bearish order block",       "{{ticker}} {{interval}}: new bearish order block")
+alertcondition(bullObTouch,  "Bullish OB retest",             "{{ticker}} {{interval}}: price retested a bullish order block at {{close}}")
+alertcondition(bearObTouch,  "Bearish OB retest",             "{{ticker}} {{interval}}: price retested a bearish order block at {{close}}")
+alertcondition(bullObMit,    "Bullish OB invalidated",        "{{ticker}} {{interval}}: bullish order block broken")
+alertcondition(bearObMit,    "Bearish OB invalidated",        "{{ticker}} {{interval}}: bearish order block broken")
+alertcondition(newBullFVG,   "New bullish FVG",               "{{ticker}} {{interval}}: new bullish fair value gap")
+alertcondition(newBearFVG,   "New bearish FVG",               "{{ticker}} {{interval}}: new bearish fair value gap")
+alertcondition(bullFvgTouch, "Bullish FVG retest",            "{{ticker}} {{interval}}: price entered a bullish fair value gap at {{close}}")
+alertcondition(bearFvgTouch, "Bearish FVG retest",            "{{ticker}} {{interval}}: price entered a bearish fair value gap at {{close}}")
+alertcondition(bullFvgMit,   "Bullish FVG filled",            "{{ticker}} {{interval}}: bullish fair value gap filled")
+alertcondition(bearFvgMit,   "Bearish FVG filled",            "{{ticker}} {{interval}}: bearish fair value gap filled")

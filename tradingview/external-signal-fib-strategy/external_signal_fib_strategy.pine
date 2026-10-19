@@ -1,0 +1,97 @@
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ivan Semernya — External Signal + Fibonacci Targets
+// Backtests BUY/SELL signals coming from ANOTHER indicator on the chart (e.g. a signal provider's script),
+// with the stop at the last swing and take profits on Fibonacci levels of that swing.
+
+//@version=6
+strategy("External Signal + Fibonacci Targets", "ExtSig Fib", overlay = true, initial_capital = 10000,
+         default_qty_type = strategy.percent_of_equity, default_qty_value = 10, pyramiding = 0,
+         commission_type = strategy.commission.percent, commission_value = 0.02, slippage = 2,
+         process_orders_on_close = false)
+
+// ───────────────────────────── Signal source
+grpS = "Signal source"
+srcMode  = input.string("External indicator", "Signals from", options = ["External indicator", "Built-in demo (EMA cross)"], group = grpS,
+         tooltip = "External indicator: pick a plot of the provider's indicator below. It must be > 0 on buy bars and < 0 on sell bars (or pick separate buy/sell plots).")
+extBuy   = input.source(close, "External BUY plot", group = grpS, tooltip = "A plot that is non-zero on buy bars (e.g. the provider's 'Buy' plotshape).")
+extSell  = input.source(close, "External SELL plot", group = grpS, tooltip = "A plot that is non-zero on sell bars. Pick the same plot as BUY if it is +1 / -1.")
+sameSign = input.bool(false, "Single plot: +1 buy / -1 sell", group = grpS)
+
+grpF = "Fibonacci targets"
+swingLen = input.int(10, "Swing pivot length", minval = 2, group = grpF)
+tp1Fib   = input.float(1.0, "TP1 (x swing size)", step = 0.118, group = grpF, tooltip = "1.0 = the full swing, 1.618 = the golden extension.")
+tp2Fib   = input.float(1.618, "TP2 (x swing size)", step = 0.118, group = grpF)
+tp1Pct   = input.int(50, "Close % at TP1", minval = 0, maxval = 100, group = grpF)
+slBuffer = input.float(0.1, "Stop beyond the swing (x swing size)", step = 0.05, group = grpF)
+showFib  = input.bool(true, "Draw the Fibonacci levels of the last swing", group = grpF)
+
+// ───────────────────────────── Signals
+float emaF = ta.ema(close, 20)
+float emaS = ta.ema(close, 50)
+bool demoBuy  = ta.crossover(emaF, emaS)
+bool demoSell = ta.crossunder(emaF, emaS)
+bool extIsSet = extBuy != close or extSell != close  // left at the default 'close' = not connected
+bool buySig  = srcMode == "External indicator" ? (sameSign ? extBuy > 0 : (extBuy != 0 and not na(extBuy) and extIsSet)) : demoBuy
+bool sellSig = srcMode == "External indicator" ? (sameSign ? extBuy < 0 : (extSell != 0 and not na(extSell) and extIsSet)) : demoSell
+buySig  := buySig and barstate.isconfirmed and (srcMode != "External indicator" or extIsSet)
+sellSig := sellSig and barstate.isconfirmed and (srcMode != "External indicator" or extIsSet)
+
+// ───────────────────────────── Last confirmed swing (no repainting: pivots confirm swingLen bars later)
+var float swHigh = na
+var float swLow  = na
+var int   swHighBar = na
+var int   swLowBar  = na
+float ph = ta.pivothigh(high, swingLen, swingLen)
+float pl = ta.pivotlow(low, swingLen, swingLen)
+if not na(ph)
+    swHigh := ph
+    swHighBar := bar_index - swingLen
+if not na(pl)
+    swLow := pl
+    swLowBar := bar_index - swingLen
+float swing = swHigh - swLow
+// a pivot confirms swingLen bars late, so the real extreme of the current leg can be newer than the last pivot.
+// Anchor the stop to that extreme, otherwise a signal that fires below the last swing low gets a stop right at the price.
+int   barsSinceHigh = na(swHighBar) ? 1 : math.min(500, math.max(1, bar_index - swHighBar + 1))
+int   barsSinceLow  = na(swLowBar) ? 1 : math.min(500, math.max(1, bar_index - swLowBar + 1))
+float legLow  = math.min(swLow, ta.lowest(low, barsSinceHigh))
+float legHigh = math.max(swHigh, ta.highest(high, barsSinceLow))
+
+// ───────────────────────────── Orders
+if buySig and strategy.position_size <= 0 and not na(swing) and swing > 0
+    float legSwing = swHigh - legLow
+    float sl  = legLow - slBuffer * legSwing
+    float tp1 = legLow + tp1Fib * legSwing
+    float tp2 = legLow + tp2Fib * legSwing
+    if close > sl and tp1 > close
+        strategy.entry("Long", strategy.long)
+        strategy.exit("Long TP1", "Long", qty_percent = tp1Pct, limit = tp1, stop = sl, comment_profit = "TP1", comment_loss = "SL")
+        strategy.exit("Long TP2", "Long", limit = tp2, stop = sl, comment_profit = "TP2", comment_loss = "SL")
+if sellSig and strategy.position_size >= 0 and not na(swing) and swing > 0
+    float legSwing = legHigh - swLow
+    float sl  = legHigh + slBuffer * legSwing
+    float tp1 = legHigh - tp1Fib * legSwing
+    float tp2 = legHigh - tp2Fib * legSwing
+    if close < sl and tp1 < close
+        strategy.entry("Short", strategy.short)
+        strategy.exit("Short TP1", "Short", qty_percent = tp1Pct, limit = tp1, stop = sl, comment_profit = "TP1", comment_loss = "SL")
+        strategy.exit("Short TP2", "Short", limit = tp2, stop = sl, comment_profit = "TP2", comment_loss = "SL")
+
+// ───────────────────────────── Fibonacci of the last swing (drawn on the last bar)
+var array<line>  fibLines  = array.new<line>()
+var array<label> fibLabels = array.new<label>()
+if showFib and barstate.islast and not na(swing) and swing > 0
+    for l in fibLines
+        line.delete(l)
+    for lb in fibLabels
+        label.delete(lb)
+    fibLines.clear()
+    fibLabels.clear()
+    int x1 = math.min(swHighBar, swLowBar)
+    for lvl in array.from(0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.618)
+        float y = swLow + lvl * swing
+        fibLines.push(line.new(x1, y, bar_index + 10, y, color = color.new(color.orange, lvl == 0.5 ? 30 : 60), style = line.style_dotted))
+        fibLabels.push(label.new(bar_index + 10, y, str.tostring(lvl), style = label.style_label_left, color = color(na), textcolor = color.orange, size = size.tiny))
+
+plotshape(buySig, "Buy signal", shape.triangleup, location.belowbar, color.new(#089981, 0), size = size.tiny)
+plotshape(sellSig, "Sell signal", shape.triangledown, location.abovebar, color.new(#F23645, 0), size = size.tiny)

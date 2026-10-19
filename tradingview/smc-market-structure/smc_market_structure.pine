@@ -1,0 +1,213 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ivan Semernya — SMC Market Structure (swing + internal BOS/CHoCH, HH/HL/LH/LL, strong/weak extremes, EQH/EQL)
+
+//@version=6
+indicator("SMC Market Structure", "SMC Structure", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ───────────────────────────── Inputs
+grpSwing = "Swing structure"
+showSwing    = input.bool(true, "Show swing BOS / CHoCH", group = grpSwing)
+swingLen     = input.int(25, "Swing pivot length", minval = 5, maxval = 100, group = grpSwing, tooltip = "Bars on each side of a pivot. Higher = bigger, slower structure.")
+showHHLL     = input.bool(true, "Label swing points (HH / HL / LH / LL)", group = grpSwing)
+
+grpInt = "Internal structure"
+showInt      = input.bool(true, "Show internal BOS / CHoCH", group = grpInt)
+intLen       = input.int(5, "Internal pivot length", minval = 2, maxval = 20, group = grpInt)
+
+grpConf = "Confirmation"
+breakSrc     = input.string("Close", "Break confirmed by", options = ["Close", "Wick"], group = grpConf, tooltip = "Close: candle must close beyond the level. Wick: high/low touching beyond the level is enough.")
+onBarClose   = input.bool(true, "Signal only on confirmed (closed) bars", group = grpConf, tooltip = "Prevents signals that appear and disappear on the live bar.")
+
+grpLvl = "Levels"
+showStrong   = input.bool(true, "Strong / weak high & low", group = grpLvl)
+showEq       = input.bool(true, "Equal highs / lows (EQH / EQL)", group = grpLvl)
+eqLen        = input.int(3, "EQH / EQL pivot length", minval = 1, maxval = 10, group = grpLvl)
+eqThresh     = input.float(0.1, "EQH / EQL threshold (x ATR)", minval = 0.0, maxval = 1.0, step = 0.05, group = grpLvl)
+
+grpStyle = "Style"
+bullCol      = input.color(#089981, "Bullish", group = grpStyle)
+bearCol      = input.color(#F23645, "Bearish", group = grpStyle)
+intLineStyle = input.string("Dashed", "Internal line style", options = ["Solid", "Dashed", "Dotted"], group = grpStyle)
+lblSizeIn    = input.string("Small", "Swing label size", options = ["Tiny", "Small", "Normal"], group = grpStyle)
+colorBars    = input.bool(false, "Color candles by internal trend", group = grpStyle)
+
+grpDisp = "Display"
+maxInt       = input.int(20, "Max internal breaks on chart", minval = 1, maxval = 200, group = grpDisp, tooltip = "Older internal BOS/CHoCH are removed to keep the chart clean.")
+maxSwing     = input.int(50, "Max swing breaks on chart", minval = 1, maxval = 200, group = grpDisp)
+
+// ───────────────────────────── Types
+type Pivot
+    float price   = na
+    int   bar     = na
+    bool  crossed = false
+
+type Structure
+    Pivot hi
+    Pivot lo
+    int   trend = 0  // 1 = bullish, -1 = bearish, 0 = undefined
+
+// ───────────────────────────── Drawn objects (kept to the last N per structure level)
+var array<line>  intLines  = array.new<line>()
+var array<label> intLabels = array.new<label>()
+var array<line>  swLines   = array.new<line>()
+var array<label> swLabels  = array.new<label>()
+
+// ───────────────────────────── Helpers
+lineStyleOf(string s) =>
+    s == "Solid" ? line.style_solid : s == "Dotted" ? line.style_dotted : line.style_dashed
+
+labelSizeOf(string s) =>
+    s == "Tiny" ? size.tiny : s == "Normal" ? size.normal : size.small
+
+drawBreak(int x1, float y, string tag, color c, bool internal, bool isUp) =>
+    line  l  = line.new(x1, y, bar_index, y, color = c, width = internal ? 1 : 2,
+                        style = internal ? lineStyleOf(intLineStyle) : line.style_solid)
+    label lb = label.new(int(math.avg(x1, bar_index)), y, tag, color = color(na), textcolor = c,
+                         style = isUp ? label.style_label_down : label.style_label_up,
+                         size = internal ? size.tiny : labelSizeOf(lblSizeIn))
+    if internal
+        intLines.push(l)
+        intLabels.push(lb)
+        if intLines.size() > maxInt
+            line.delete(intLines.shift())
+            label.delete(intLabels.shift())
+    else
+        swLines.push(l)
+        swLabels.push(lb)
+        if swLines.size() > maxSwing
+            line.delete(swLines.shift())
+            label.delete(swLabels.shift())
+
+// Checks breaks of the current high/low of a structure. Returns tags ("BOS" / "CHoCH" / "") for bullish and bearish breaks.
+method checkBreaks(Structure s, bool internal, float skipHi, float skipLo, bool show) =>
+    string bullTag = ""
+    string bearTag = ""
+    float upSrc = breakSrc == "Close" ? close : high
+    float dnSrc = breakSrc == "Close" ? close : low
+    bool ready = not onBarClose or barstate.isconfirmed
+    if ready and not na(s.hi.price) and not s.hi.crossed and upSrc > s.hi.price
+        if not (internal and s.hi.price == skipHi)
+            bullTag := s.trend == -1 ? "CHoCH" : "BOS"
+            if show
+                drawBreak(s.hi.bar, s.hi.price, bullTag, bullCol, internal, true)
+        s.hi.crossed := true
+        s.trend := 1
+    if ready and not na(s.lo.price) and not s.lo.crossed and dnSrc < s.lo.price
+        if not (internal and s.lo.price == skipLo)
+            bearTag := s.trend == 1 ? "CHoCH" : "BOS"
+            if show
+                drawBreak(s.lo.bar, s.lo.price, bearTag, bearCol, internal, false)
+        s.lo.crossed := true
+        s.trend := -1
+    [bullTag, bearTag]
+
+// ───────────────────────────── State
+var Structure swingS = Structure.new(Pivot.new(), Pivot.new(), 0)
+var Structure intS   = Structure.new(Pivot.new(), Pivot.new(), 0)
+
+var float trailTop    = na
+var int   trailTopBar = na
+var float trailBot    = na
+var int   trailBotBar = na
+
+var float lastEqH    = na
+var int   lastEqHBar = na
+var float lastEqL    = na
+var int   lastEqLBar = na
+
+float atr = ta.atr(200)
+
+// ───────────────────────────── Pivots (confirmed after N bars on the right → no repainting)
+float sph = ta.pivothigh(high, swingLen, swingLen)
+float spl = ta.pivotlow(low, swingLen, swingLen)
+float iph = ta.pivothigh(high, intLen, intLen)
+float ipl = ta.pivotlow(low, intLen, intLen)
+float eph = ta.pivothigh(high, eqLen, eqLen)
+float epl = ta.pivotlow(low, eqLen, eqLen)
+
+if not na(sph)
+    int pb = bar_index - swingLen
+    if showHHLL
+        string t = na(swingS.hi.price) ? "H" : sph > swingS.hi.price ? "HH" : "LH"
+        label.new(pb, sph, t, color = color(na), textcolor = bearCol, style = label.style_label_down, size = size.tiny)
+    swingS.hi := Pivot.new(sph, pb, false)
+    trailTop    := sph
+    trailTopBar := pb
+
+if not na(spl)
+    int pb = bar_index - swingLen
+    if showHHLL
+        string t = na(swingS.lo.price) ? "L" : spl < swingS.lo.price ? "LL" : "HL"
+        label.new(pb, spl, t, color = color(na), textcolor = bullCol, style = label.style_label_up, size = size.tiny)
+    swingS.lo := Pivot.new(spl, pb, false)
+    trailBot    := spl
+    trailBotBar := pb
+
+if not na(iph)
+    intS.hi := Pivot.new(iph, bar_index - intLen, false)
+if not na(ipl)
+    intS.lo := Pivot.new(ipl, bar_index - intLen, false)
+
+// trailing extremes since the last swing pivot
+if na(trailTop) or high > trailTop
+    trailTop    := high
+    trailTopBar := bar_index
+if na(trailBot) or low < trailBot
+    trailBot    := low
+    trailBotBar := bar_index
+
+// ───────────────────────────── Breaks of structure
+[sBull, sBear] = swingS.checkBreaks(false, na, na, showSwing)
+[iBull, iBear] = intS.checkBreaks(true, swingS.hi.price, swingS.lo.price, showInt)
+
+// ───────────────────────────── Equal highs / lows
+bool eqhNow = false
+bool eqlNow = false
+if not na(eph)
+    int pb = bar_index - eqLen
+    if not na(lastEqH) and math.abs(eph - lastEqH) < eqThresh * atr
+        eqhNow := true
+        if showEq
+            line.new(lastEqHBar, lastEqH, pb, eph, color = bearCol, style = line.style_dotted)
+            label.new(int(math.avg(lastEqHBar, pb)), math.max(eph, lastEqH), "EQH", color = color(na), textcolor = bearCol, style = label.style_label_down, size = size.tiny)
+    lastEqH    := eph
+    lastEqHBar := pb
+if not na(epl)
+    int pb = bar_index - eqLen
+    if not na(lastEqL) and math.abs(epl - lastEqL) < eqThresh * atr
+        eqlNow := true
+        if showEq
+            line.new(lastEqLBar, lastEqL, pb, epl, color = bullCol, style = line.style_dotted)
+            label.new(int(math.avg(lastEqLBar, pb)), math.min(epl, lastEqL), "EQL", color = color(na), textcolor = bullCol, style = label.style_label_up, size = size.tiny)
+    lastEqL    := epl
+    lastEqLBar := pb
+
+// ───────────────────────────── Strong / weak high & low (redrawn on the last bar)
+var line  topLine = na
+var label topLbl  = na
+var line  botLine = na
+var label botLbl  = na
+if showStrong and barstate.islast
+    line.delete(topLine)
+    label.delete(topLbl)
+    line.delete(botLine)
+    label.delete(botLbl)
+    int xr = bar_index + 20
+    topLine := line.new(trailTopBar, trailTop, xr, trailTop, color = bearCol, width = 1)
+    topLbl  := label.new(xr, trailTop, swingS.trend == -1 ? "Strong High" : "Weak High", color = color(na), textcolor = bearCol, style = label.style_label_left, size = size.small)
+    botLine := line.new(trailBotBar, trailBot, xr, trailBot, color = bullCol, width = 1)
+    botLbl  := label.new(xr, trailBot, swingS.trend == 1 ? "Strong Low" : "Weak Low", color = color(na), textcolor = bullCol, style = label.style_label_left, size = size.small)
+
+// ───────────────────────────── Candles & alerts
+barcolor(colorBars ? (intS.trend == 1 ? bullCol : intS.trend == -1 ? bearCol : na) : na)
+
+alertcondition(sBull == "BOS",   "Swing bullish BOS",   "{{ticker}} {{interval}}: swing bullish BOS at {{close}}")
+alertcondition(sBull == "CHoCH", "Swing bullish CHoCH", "{{ticker}} {{interval}}: swing bullish CHoCH at {{close}}")
+alertcondition(sBear == "BOS",   "Swing bearish BOS",   "{{ticker}} {{interval}}: swing bearish BOS at {{close}}")
+alertcondition(sBear == "CHoCH", "Swing bearish CHoCH", "{{ticker}} {{interval}}: swing bearish CHoCH at {{close}}")
+alertcondition(iBull == "BOS",   "Internal bullish BOS",   "{{ticker}} {{interval}}: internal bullish BOS at {{close}}")
+alertcondition(iBull == "CHoCH", "Internal bullish CHoCH", "{{ticker}} {{interval}}: internal bullish CHoCH at {{close}}")
+alertcondition(iBear == "BOS",   "Internal bearish BOS",   "{{ticker}} {{interval}}: internal bearish BOS at {{close}}")
+alertcondition(iBear == "CHoCH", "Internal bearish CHoCH", "{{ticker}} {{interval}}: internal bearish CHoCH at {{close}}")
+alertcondition(eqhNow, "Equal highs (EQH)", "{{ticker}} {{interval}}: equal highs formed")
+alertcondition(eqlNow, "Equal lows (EQL)",  "{{ticker}} {{interval}}: equal lows formed")

@@ -1,0 +1,22 @@
+# secrets: keys and webhook secrets live only in local .env files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# MetaTrader build output and logs
+*.ex4
+*.ex5
+*.log
+
+# local test output and broker data (never published)
+results/
+data/
+*.db
+
+# OS files
+Thumbs.db
+.DS_Store

@@ -1,0 +1,10 @@
+// © Ivan Semernya — stand-in for a third-party "signal provider" indicator, used to test
+// that External Signal + Fibonacci Targets can read signals from another script via input.source.
+//@version=6
+indicator("Demo Signal Provider", "Provider", overlay = true)
+float r = ta.rsi(close, 14)
+bool buy  = ta.crossover(r, 30)
+bool sell = ta.crossunder(r, 70)
+plotshape(buy, "Buy", shape.labelup, location.belowbar, color.green, text = "B", textcolor = color.white)
+plotshape(sell, "Sell", shape.labeldown, location.abovebar, color.red, text = "S", textcolor = color.white)
+plot(buy ? 1 : sell ? -1 : 0, "Signal (+1 buy / -1 sell)", display = display.data_window)

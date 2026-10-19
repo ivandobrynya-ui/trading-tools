@@ -1,0 +1,102 @@
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ivan Semernya — Multi-Indicator Value Strategy
+
+//@version=6
+strategy("Multi-Indicator Value Strategy", "MIV", overlay = true, initial_capital = 10000,
+         default_qty_type = strategy.percent_of_equity, default_qty_value = 95, pyramiding = 0,  // 5% cash buffer: no margin calls on gaps
+         commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2,
+         process_orders_on_close = false)
+
+// ───────────────────────────── Inputs
+grpT = "Technical signals"
+bbLen    = input.int(20, "Bollinger length", group = grpT)
+bbMult   = input.float(2.0, "Bollinger multiplier", step = 0.1, group = grpT)
+rsiLen   = input.int(14, "RSI length", group = grpT)
+rsiLow   = input.int(35, "RSI oversold", group = grpT)
+rsiHigh  = input.int(65, "RSI overbought", group = grpT)
+stK      = input.int(14, "Stochastic %K", group = grpT)
+stD      = input.int(3, "Stochastic %D", group = grpT)
+stLow    = input.int(20, "Stochastic oversold", group = grpT)
+stHigh   = input.int(80, "Stochastic overbought", group = grpT)
+macdFast = input.int(12, "MACD fast", group = grpT)
+macdSlow = input.int(26, "MACD slow", group = grpT)
+macdSig  = input.int(9, "MACD signal", group = grpT)
+window   = input.int(5, "Signals must agree within N bars", minval = 1, group = grpT)
+needVotes = input.int(3, "Votes needed (of 4)", minval = 1, maxval = 4, group = grpT)
+
+grpF = "Valuation filter (stocks)"
+useVal   = input.bool(true, "Use P/E and P/B filter", group = grpF)
+maxPE    = input.float(30.0, "Max P/E (TTM) for longs", group = grpF)
+maxPB    = input.float(8.0, "Max P/B (last quarter) for longs", group = grpF)
+allowNoData = input.bool(false, "Trade when fundamentals are missing", group = grpF,
+         tooltip = "How far back TradingView has financials depends on the plan. Off: no longs on bars without P/E and P/B data.")
+
+grpR = "Exits"
+atrLen   = input.int(14, "ATR length", group = grpR)
+slAtr    = input.float(2.0, "Stop loss (x ATR)", step = 0.25, group = grpR)
+tpAtr    = input.float(4.0, "Take profit (x ATR)", step = 0.25, group = grpR)
+exitOnSell = input.bool(true, "Close the long on a sell signal", group = grpR)
+
+// ───────────────────────────── Indicators
+[bbMid, bbUp, bbLo] = ta.bb(close, bbLen, bbMult)
+float rsi = ta.rsi(close, rsiLen)
+float k   = ta.sma(ta.stoch(close, high, low, stK), stD)
+float d   = ta.sma(k, stD)
+[macdLine, sigLine, _] = ta.macd(close, macdFast, macdSlow, macdSig)
+float atr = ta.atr(atrLen)
+
+// each vote is an event; "within N bars" lets the four indicators confirm each other close in time
+bool bbBuy    = ta.barssince(ta.crossover(close, bbLo)) < window
+bool rsiBuy   = ta.barssince(ta.crossover(rsi, rsiLow)) < window
+bool stBuy    = ta.barssince(ta.crossover(k, d) and k < stLow + 10) < window
+bool macdBuy  = ta.barssince(ta.crossover(macdLine, sigLine)) < window
+bool bbSell   = ta.barssince(ta.crossunder(close, bbUp)) < window
+bool rsiSell  = ta.barssince(ta.crossunder(rsi, rsiHigh)) < window
+bool stSell   = ta.barssince(ta.crossunder(k, d) and k > stHigh - 10) < window
+bool macdSell = ta.barssince(ta.crossunder(macdLine, sigLine)) < window
+
+int buyVotes  = (bbBuy ? 1 : 0) + (rsiBuy ? 1 : 0) + (stBuy ? 1 : 0) + (macdBuy ? 1 : 0)
+int sellVotes = (bbSell ? 1 : 0) + (rsiSell ? 1 : 0) + (stSell ? 1 : 0) + (macdSell ? 1 : 0)
+
+// ───────────────────────────── Fundamentals (stocks only)
+// The ready-made PRICE_EARNINGS_RATIO / PRICE_BOOK_RATIO ids return na in request.financial, so the ratios are
+// built from the current price and the per-share numbers, the same way TradingView shows them.
+bool isStock = syminfo.type == "stock"
+float eps  = isStock ? request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_DILUTED", "TTM", ignore_invalid_symbol = true) : na
+float bvps = isStock ? request.financial(syminfo.tickerid, "BOOK_VALUE_PER_SHARE", "FQ", ignore_invalid_symbol = true) : na
+float pe = not na(eps) and eps > 0 ? close / eps : na     // a loss-making company has no P/E and fails the filter
+float pb = not na(bvps) and bvps > 0 ? close / bvps : na
+bool fundMissing = na(eps) or na(bvps)
+bool valueOk = not useVal or not isStock or (fundMissing ? allowNoData : not na(pe) and pe <= maxPE and not na(pb) and pb <= maxPB)
+
+// ───────────────────────────── Orders (decided on bar close, filled on the next bar open)
+bool longSignal = buyVotes >= needVotes and valueOk and barstate.isconfirmed
+bool sellSignal = sellVotes >= needVotes and barstate.isconfirmed
+
+if longSignal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long exit", "Long", stop = close - slAtr * atr, limit = close + tpAtr * atr)
+if exitOnSell and sellSignal and strategy.position_size > 0
+    strategy.close("Long", comment = "Sell signal")
+
+// ───────────────────────────── Visuals and alerts
+plot(bbUp, "BB upper", color.new(color.gray, 60))
+plot(bbLo, "BB lower", color.new(color.gray, 60))
+plotshape(longSignal, "Buy", shape.triangleup, location.belowbar, color.new(#089981, 0), size = size.small)
+plotshape(sellSignal, "Sell", shape.triangledown, location.abovebar, color.new(#F23645, 0), size = size.small)
+
+var table t = table.new(position.top_right, 2, 5, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 80), frame_width = 1)
+if barstate.islast
+    table.cell(t, 0, 0, "Buy votes", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 1, 0, str.tostring(buyVotes) + "/4", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 0, 1, "Sell votes", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 1, 1, str.tostring(sellVotes) + "/4", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 0, 2, "P/E (TTM)", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 1, 2, not na(pe) ? str.tostring(pe, "#.##") : not na(eps) and eps <= 0 ? "loss" : "n/a", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 0, 3, "P/B (FQ)", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 1, 3, na(pb) ? "n/a" : str.tostring(pb, "#.##"), text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 0, 4, "Valuation", text_color = chart.fg_color, text_size = size.small)
+    table.cell(t, 1, 4, not isStock ? "not a stock" : fundMissing ? (valueOk ? "no data, allowed" : "no data") : valueOk ? "OK" : "too expensive", text_color = valueOk ? #089981 : #F23645, text_size = size.small)
+
+alertcondition(longSignal, "Buy signal", "{{ticker}} {{interval}}: buy signal ({{close}})")
+alertcondition(sellSignal, "Sell signal", "{{ticker}} {{interval}}: sell signal ({{close}})")
